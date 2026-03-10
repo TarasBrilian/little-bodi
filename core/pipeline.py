@@ -79,6 +79,8 @@ class AnalysisContext:
     validated_exploits: list = field(default_factory=list)
 
     # --- Metadata ---
+    report_files: list[str] = field(default_factory=list)
+    analysis_summary: Optional[object] = None
     analysis_start: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     analysis_end: Optional[datetime] = None
     errors: list[dict] = field(default_factory=list)
@@ -176,6 +178,9 @@ class AnalysisPipeline:
         from core.concolic_execution.engine import ConcolicEngine
         from core.symbolic_execution.engine import SymbolicExecutionEngine
         from core.vulnerability.engine import VulnerabilityEngine
+        from core.exploit_generation.engine import ExploitGenerationEngine
+        from core.validation.engine import ValidationEngine
+        from core.reporting.engine import ReportingEngine
         
         self._engines = [
             BytecodeAnalysisEngine(self.config),
@@ -183,6 +188,9 @@ class AnalysisPipeline:
             ConcolicEngine(self.config) if self.config.use_concolic
                 else SymbolicExecutionEngine(self.config),
             VulnerabilityEngine(self.config),
+            ExploitGenerationEngine(self.config),
+            ValidationEngine(self.config),
+            ReportingEngine(self.config),
         ]
 
     def run(
