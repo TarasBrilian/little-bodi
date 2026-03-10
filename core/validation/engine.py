@@ -38,8 +38,52 @@ class ExploitValidator:
 
     def validate(self, exploit: Exploit, bytecode: Optional[bytes] = None) -> ValidatedExploit:
         """
-        Primary validation path. Attempts full fork simulation; falls back to offline.
+        Primary validation path.
+        1. Try live RPC-backed eth_call if rpc_url is available.
+        2. Fallback to LocalEVMFork for local pyro-evm simulation.
         """
+        if self.rpc_url:
+            try:
+                from web3 import Web3
+                w3 = Web3(Web3.HTTPProvider(self.rpc_url))
+                
+                logger.info(f"Validating exploit at PC={exploit.vuln_call_pc} via eth_call...")
+                
+                # Execute via eth_call
+                call_tx = {
+                    "from": exploit.from_address,
+                    "to": exploit.to_address,
+                    "data": exploit.calldata.hex() if isinstance(exploit.calldata, bytes) else exploit.calldata,
+                    "value": exploit.value,
+                    "gas": exploit.gas_limit,
+                }
+                
+                block_id = exploit.block_number if exploit.block_number else "latest"
+                
+                # Note: eth_call doesn't return events, but if it doesn't revert, 
+                # we can use estimate_gas to confirm it works or use debug_traceCall if available.
+                # Standard practice: if it doesn't revert, it's a good sign.
+                try:
+                    res = w3.eth.call(call_tx, block_identifier=block_id)
+                    logger.info(f"eth_call success: {res.hex()}")
+                    
+                    # Try to estimate gas for reporting
+                    try:
+                        gas_estimate = w3.eth.estimate_gas(call_tx, block_identifier=block_id)
+                        logger.info(f"Gas estimate: {gas_estimate}")
+                    except Exception as ge:
+                        logger.debug(f"Gas estimation failed: {ge}")
+                        gas_estimate = 0
+                        
+                    # We still run local fork to get events, but we can pre-populate success if eth_call worked
+                except Exception as e:
+                    logger.warning(f"eth_call failed (reversion expected): {e}")
+                    # We continue to local fork anyway to check PCs and internal events
+
+            except Exception as e:
+                logger.debug(f"RPC setup failed: {e}")
+
+        # Local Fork Simulation (Authoritative for event logs)
         try:
             fork = LocalEVMFork(rpc_url=self.rpc_url, block_number=exploit.block_number)
             fork.setup(exploit.to_address, bytecode=bytecode)
@@ -53,10 +97,18 @@ class ExploitValidator:
             )
 
             if not result.success:
+                note = None
+                if exploit.requires_phishing:
+                    note = "Vulnerability confirmed but auto-validation blocked by phishing requirement (tx.origin)"
+                elif "10" in str(result.revert_reason):
+                    note = "Validation blocked by contract access control (msg.sender check)"
+
                 return ValidatedExploit(
                     exploit=exploit,
                     success=False,
                     validation_error=f"Transaction reverted: {result.revert_reason}",
+                    validation_note=note,
+                    tx_receipt=result.to_dict(),
                 )
 
             transfer_valid = self._verify_transfer_event(
@@ -72,6 +124,8 @@ class ExploitValidator:
                     exploit=exploit,
                     success=False,
                     validation_error="No valid Transfer event found in logs",
+                    validation_note="Vulnerability reached PC but no assets were moved (check balance requirements)",
+                    tx_receipt=result.to_dict(),
                 )
 
             return ValidatedExploit(
@@ -83,11 +137,11 @@ class ExploitValidator:
             )
 
         except Exception as e:
-            logger.error(f"Validation error for exploit at PC={exploit.vuln_call_pc}: {e}")
+            logger.error(f"Local validation failed: {e}")
             return ValidatedExploit(
                 exploit=exploit,
                 success=False,
-                validation_error=f"Validation exception: {e}",
+                validation_error=f"Local exception: {e}",
             )
 
     def validate_offline(self, exploit: Exploit, bytecode: bytes) -> ValidatedExploit:

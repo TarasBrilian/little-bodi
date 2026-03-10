@@ -276,7 +276,7 @@ TOKEN_DECIMALS: dict[str, int] = {
 # Adversary / Simulation Addresses
 # ---------------------------------------------------------------------------
 
-ADVERSARY_ADDRESS: str = "0xDeadDeAddeAddEAddeadDEaDDEAdDeaDDeAD0000"
+ADVERSARY_ADDRESS: str = "0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266"
 ADVERSARY_ADDRESS_INT: int = int(ADVERSARY_ADDRESS, 16)
 
 # ---------------------------------------------------------------------------

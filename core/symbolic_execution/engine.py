@@ -39,12 +39,6 @@ class SymbolicExecutionEngine(BaseEngine):
         # Create Initial State
         initial_state = SymbolicState(pc=0)
         
-        print("DEBUG: CFG type =", type(cfg))
-        print("DEBUG: CFG blocks count =", len(cfg.blocks) if cfg else "None")
-        print("DEBUG: Initial worklist =", [initial_state.pc])
-        print("DEBUG: max_paths config =", self.config.max_symbolic_paths)
-        print("DEBUG: max_depth config =", self.config.max_path_depth)
-        
         # Run Symbolic Execution
         traces = interpreter.execute(initial_state)
         

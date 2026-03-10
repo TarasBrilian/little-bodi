@@ -10,6 +10,8 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Optional
 
+from core.constants import ADVERSARY_ADDRESS
+
 logger = logging.getLogger(__name__)
 
 
@@ -30,13 +32,14 @@ class AnalysisConfig:
     # Execution
     use_concolic: bool = True
     max_seeds: int = 50
-    timeout_per_contract: int = 600
-    max_symbolic_paths: int = 10_000
-    max_path_depth: int = 500
+    timeout_per_contract: int = 30
+    max_symbolic_paths: int = 300
+    max_path_depth: int = 75
     fallback_to_symbolic: bool = True
+    stop_on_first_vuln: bool = True
 
     # Vulnerability / Exploit
-    adversary_address: str = "0xDeadDeAddeAddEAddeadDEaDDEAdDeaDDeAD0000"
+    adversary_address: str = ADVERSARY_ADDRESS
     max_tokens_per_contract: int = 7
     gas_limit: int = 1_000_000
 

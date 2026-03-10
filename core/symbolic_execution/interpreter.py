@@ -3,8 +3,10 @@ from __future__ import annotations
 import z3
 import logging
 import time
+import heapq
 from typing import List, Dict, Optional, Tuple, Set, Union, Any
 from dataclasses import dataclass
+from collections import deque
 
 from core.constants import (
     # Control flow
@@ -141,6 +143,7 @@ class SymbolicEVMInterpreter:
         self.cfg = cfg
         self.config = config
         self.disassembly: Dict[int, Instruction] = self._flatten_cfg(cfg)
+        self.blocks_that_can_reach_call, self.block_distances = self._precompute_reachability(cfg)
 
     def _flatten_cfg(self, cfg: ControlFlowGraph) -> Dict[int, Instruction]:
         """
@@ -189,6 +192,41 @@ class SymbolicEVMInterpreter:
                 )
 
         return instrs
+
+    def _precompute_reachability(self, cfg: ControlFlowGraph) -> Tuple[Set[int], Dict[int, int]]:
+        """
+        Uses reverse BFS from CALL blocks to identify all blocks that can reach a CALL.
+        Returns a set of block start_pcs and a dictionary of distances to the nearest CALL.
+        """
+        call_opcodes = {0xf1, 0xf2, 0xf4, 0xfa} # CALL, CALLCODE, DELEGATECALL, STATICCALL
+        call_blocks = []
+        for pc, block in cfg.blocks.items():
+            if any(instr.opcode in call_opcodes for instr in block.instructions):
+                call_blocks.append(pc)
+        
+        if not call_blocks:
+            return set(), {}
+
+        # Reverse BFS
+        reachable = set()
+        distances = {}
+        queue = deque([(pc, 0) for pc in call_blocks])
+        
+        while queue:
+            pc, d = queue.popleft()
+            if pc in reachable and distances[pc] <= d:
+                continue
+                
+            reachable.add(pc)
+            distances[pc] = d
+            
+            block = cfg.blocks.get(pc)
+            if block:
+                for pred in block.predecessors:
+                    if pred not in reachable or distances.get(pred, float('inf')) > d + 1:
+                        queue.append((pred, d + 1))
+                        
+        return reachable, distances
 
     def execute(self, initial_state: SymbolicState) -> List[SymbolicState]:
         """Explores paths using DFS."""
@@ -246,10 +284,6 @@ class SymbolicEVMInterpreter:
                     stats["pruned_other"] += 1
                 traces.append(state)
 
-        if not worklist:
-            stats["worklist_empty"] = 1
-
-        print("DEBUG: Final stats =", stats)
         return traces
 
     def _execute_path(self, state: SymbolicState) -> ExecutionResult:
@@ -538,18 +572,6 @@ class SymbolicEVMInterpreter:
             state.stack.append(res)
             return True
 
-        if op in (0x52, 0x53):  # MSTORE, MSTORE8
-            if len(state.stack) < 2:
-                return False
-            offset = state.stack.pop()
-            val = state.stack.pop()
-            # In our simplified memory model, just storing value at offset
-            if isinstance(offset, int):
-                state.memory[offset] = val
-            else:
-                state.memory[str(offset)] = val
-            return True
-
         if op == OP_CALLDATASIZE:
             sym_size = z3.BitVec(f"calldata_size_{instr.pc}", 256)
             state.path_constraints.append(sym_size >= 4)  # Assume at least a selector
@@ -560,9 +582,14 @@ class SymbolicEVMInterpreter:
             if not state.stack:
                 return False
             offset = state.stack.pop()
-            sym_val = z3.BitVec(
-                f"calldata_{instr.pc}_{len(state.path_constraints)}", 256
-            )
+            # Standardized naming: calldata_{pc}_{offset}
+            # This allows the synthesizer to know exactly which byte this variable represents.
+            if isinstance(offset, int):
+                name = f"calldata_{instr.pc}_{offset}"
+            else:
+                name = f"calldata_{instr.pc}_sym_{len(state.path_constraints)}"
+            
+            sym_val = z3.BitVec(name, 256)
             state.taint_map.mark_tainted(
                 sym_val, "calldata", offset if isinstance(offset, int) else None
             )
@@ -585,8 +612,9 @@ class SymbolicEVMInterpreter:
                 for i in range(0, length, 32):
                     chunk_offset = offset + i
                     mem_offset = destOffset + i
+                    # Standardized naming matches synthesizer's parser
                     sym_val = z3.BitVec(
-                        f"calldata_chunk_{instr.pc}_{chunk_offset}", 256
+                        f"calldata_{instr.pc}_{chunk_offset}", 256
                     )
                     state.taint_map.mark_tainted(sym_val, "calldata", chunk_offset)
                     state.memory[mem_offset] = sym_val
@@ -626,23 +654,30 @@ class SymbolicEVMInterpreter:
             # Try to extract function selector and arguments from memory
             # Note: This assumes standard ABI calldata layout
             if isinstance(in_off, int):
-                # We check the memory at in_off.
-                # Our memory is word-based (simplified), so in_off usually points to the start of a word.
-                data_word0 = state.memory.get(in_off, None)
-                if data_word0 is not None:
-                    # Logic to extract selector (4 bytes) and arg1 (32 bytes)
-                    # This is heuristic-based because we don't have a real byte-addressed memory.
-                    encounter.function_selector = data_word0
+                # Standard ABI: Word 0 has selector. Arg1 starts at +4, Arg2 at +36.
+                # However, if memory is word-aligned at in_off, they might be at +32, +64.
+                # Heuristic: pick the first one that exists and is tainted.
+                
+                # Selector is at in_off (top 4 bytes usually)
+                encounter.function_selector = state.memory.get(in_off, None)
+                
+                # Arg1 (Recipient): check standard offset +4 first, then aligned +32
+                arg1_candidates = [in_off + 4, in_off + 32]
+                for cand in arg1_candidates:
+                    val = state.memory.get(cand, None)
+                    if val is not None:
+                        encounter.arg1_recipient = val
+                        if state.taint_map.is_tainted(val):
+                            break # Found it
 
-                    data_word1 = state.memory.get(
-                        in_off + 32, None
-                    )  # Often arg1 starts at relative +4, but if they aligned...
-                    # In many cases, arg1 is the SECOND word if selector is at the first word's top.
-                    # This is very simplified.
-                    encounter.arg1_recipient = data_word1
-
-                    data_word2 = state.memory.get(in_off + 64, None)
-                    encounter.arg2_amount = data_word2
+                # Arg2 (Amount): check standard +36 first, then aligned +64
+                arg2_candidates = [in_off + 36, in_off + 64]
+                for cand in arg2_candidates:
+                    val = state.memory.get(cand, None)
+                    if val is not None:
+                        encounter.arg2_amount = val
+                        if state.taint_map.is_tainted(val):
+                            break
 
             encounter.taint.target_tainted = state.taint_map.is_tainted(to)
             encounter.taint.args_tainted = state.taint_map.is_tainted(in_off)

@@ -44,6 +44,7 @@ class ValidatedExploit(BaseModel):
     transfer_events: List[Dict[str, Any]] = Field(default_factory=list)
     estimated_loss_usd: float = 0.0
     validation_error: Optional[str] = None
+    validation_note: Optional[str] = None
     is_partial_validation: bool = False
 
     class Config:

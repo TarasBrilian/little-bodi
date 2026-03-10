@@ -116,6 +116,8 @@ class JSONReportFormatter:
             "type": "asset_management",
             "subtype": subtype,
             "requires_phishing": vuln.requires_tx_origin_control,
+            "false_positive_candidate": vuln.false_positive_candidate,
+            "false_positive_reason": vuln.false_positive_reason,
             "target_address": {
                 "adversary_controllable": vuln.target_address.is_adversary_controllable,
                 "is_risky_fixed": vuln.target_address.is_risky_fixed,
@@ -148,8 +150,10 @@ class JSONReportFormatter:
         validation_result = {
             "success": v.success if v else False,
             "gas_used": v.tx_receipt.get("gas_used", 0) if (v and v.tx_receipt) else 0,
+            "validation_note": v.validation_note if v else None,
             "transfer_events": len(v.transfer_events) if v else 0,
             "estimated_loss_usd": round(v.estimated_loss_usd, 2) if v else 0.0,
+            "validation_error": v.validation_error if v else "Not validated",
         }
         return {
             "vulnerability_id": hex(exp.vuln_call_pc),
@@ -298,6 +302,8 @@ class MarkdownReportFormatter:
                 f"### vuln-{i:03d} @ PC `{hex(v.call_pc)}`\n"
                 f"- **Type**: asset_management{phish}\n"
                 f"- **Confidence**: {confidence_pct}%\n"
+                f"- **Is False Positive Candidate**: {v.false_positive_candidate}\n"
+                f"- **Reason**: {v.false_positive_reason or 'N/A'}\n"
                 f"- **Recipient controllable**: {v.recipient_arg.is_adversary_controllable}\n"
                 f"- **Target controllable**: {v.target_address.is_adversary_controllable}\n"
             )
@@ -311,12 +317,13 @@ class MarkdownReportFormatter:
         if not exploits:
             return ""
         validated_map = {v.exploit.vuln_call_pc: v for v in validated}
-        rows = ["| # | Token | Validated | Loss (USD) |", "|---|-------|-----------|------------|"]
+        rows = ["| # | Token | Validated | Status | Loss (USD) |", "|---|-------|-----------|--------|------------|"]
         for i, exp in enumerate(exploits, 1):
             v = validated_map.get(exp.vuln_call_pc)
             ok = "**YES**" if (v and v.success) else "No"
+            status = v.validation_note if (v and v.validation_note) else ("_Reverted_" if (v and not v.success) else "N/A")
             loss = f"${exp.estimated_loss_usd:,.2f}" if exp.estimated_loss_usd else "N/A"
-            rows.append(f"| {i} | {exp.target_token_symbol} | {ok} | {loss} |")
+            rows.append(f"| {i} | {exp.target_token_symbol} | {ok} | {status} | {loss} |")
         return "\n".join(rows)
 
     def _render_mitigations(self, vulns: List[PotentialVulnerability]) -> str:

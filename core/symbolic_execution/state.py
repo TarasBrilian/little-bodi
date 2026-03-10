@@ -56,16 +56,35 @@ class TaintMap:
         if value is None or isinstance(value, (int, bytes)):
             return False
             
-        # Simplified check: is the entire variable record in the taint map as "calldata"
-        # and does its size match the requested size?
+        if not isinstance(value, z3.ExprRef):
+            return False
+
+        # Check if directly in taint map as calldata
         var_id = str(value)
         if var_id in self._tainted:
             info = self._tainted[var_id]
             if info.source == "calldata":
-                # Check if it's a 256-bit word (standard for CALLDATALOAD)
-                return value.size() == size_bytes * 8
+                return True
         
-        # TODO: More sophisticated check for concatenated tainted bytes
+        # Recursive check: are all base variables in this expression from calldata?
+        return self._is_derived_only_from_calldata(value)
+
+    def _is_derived_only_from_calldata(self, expr: z3.ExprRef) -> bool:
+        """Helper to check if expression only contains calldata-tainted variables."""
+        # Get all variables in the expression
+        # We can use the logic that any children must also be derived from calldata
+        var_id = str(expr)
+        if var_id in self._tainted:
+            return self._tainted[var_id].source == "calldata"
+            
+        if hasattr(expr, "children"):
+            children = expr.children()
+            if not children: # leaf node not in _tainted (like a constant or other var)
+                # If it's a constant, it's fine as part of a controllable expression (e.g. mask)
+                return True if z3.is_const(expr) and not z3.is_app(expr) else False
+
+            return all(self._is_derived_only_from_calldata(c) for c in children)
+        
         return False
 
     def get_tainted_calldata_bytes(self, value: Union[z3.BitVecRef, int, bytes, None]) -> List[int]:
@@ -78,17 +97,15 @@ class TaintMap:
         return sorted(list(set(offsets)))
 
     def _collect_offsets_recursive(self, expr: z3.ExprRef, offsets: List[int]) -> None:
-        if not hasattr(expr, "children"):
-            return
-            
         var_id = str(expr)
         if var_id in self._tainted:
             info = self._tainted[var_id]
             if info.calldata_offset is not None:
                 offsets.append(info.calldata_offset)
         
-        for child in expr.children():
-            self._collect_offsets_recursive(child, offsets)
+        if hasattr(expr, "children"):
+            for child in expr.children():
+                self._collect_offsets_recursive(child, offsets)
 
 @dataclass
 class CallTaintInfo:
@@ -139,6 +156,7 @@ class SymbolicState:
     taint_map: TaintMap = field(default_factory=TaintMap)
     call_depth: int = 0
     branch_table_visits: int = 0
+    visit_counts: Dict[int, int] = field(default_factory=dict)
     
     # Transaction context
     calldata: z3.BitVecRef = field(default_factory=lambda: z3.BitVec("calldata", 2048 * 8))
