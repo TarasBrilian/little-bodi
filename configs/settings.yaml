@@ -1,0 +1,29 @@
+analysis:
+  timeout_per_contract: 600
+  max_symbolic_paths: 10000
+  max_path_depth: 500
+  branch_table_max_visits: 2
+  fallback_to_symbolic: true
+  max_seeds: 50
+
+deobfuscation:
+  branch_table_offset: 0xe000
+  intermediate_offset: 0xf000
+
+vulnerability:
+  adversary_address: "0xDeadDeAddeAddEAddeadDEAdDeaDDeAD0000"
+  max_tokens_per_contract: 7
+
+exploit_generation:
+  gas_limit: 1000000
+  gas_price_gwei: 20
+
+validation:
+  require_transfer_event: true
+  simulate_only: true
+
+output:
+  dir: "data/results"
+  formats:
+    - json
+    - markdown

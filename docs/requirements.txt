@@ -1,0 +1,53 @@
+# Little Bodi — Dependencies
+# Python 3.12+
+
+# EVM Execution
+py-evm==0.10.0b4
+eth-hash[pysha3]==0.7.0
+eth-typing==5.0.1
+eth-utils==5.1.0
+eth-abi==5.1.0
+eth-keys==0.6.0
+eth-account==0.13.4
+rlp==4.0.1
+trie==3.0.1
+cytoolz==1.0.1
+
+# Bytecode Disassembly
+pyevmasm==0.2.3
+
+# Constraint Solving
+z3-solver==4.13.4.0
+
+# Ethereum RPC
+web3==7.6.0
+aiohttp==3.10.10
+requests==2.32.3
+
+# Data Modeling & Validation
+pydantic==2.9.2
+
+# Graph (CFG)
+networkx==3.4.2
+
+# CLI
+click==8.1.8
+rich==13.9.4
+
+# Async
+anyio==4.6.2
+
+# Utilities
+python-dotenv==1.0.1
+pyyaml==6.0.2
+msgspec==0.18.6
+
+# Testing
+pytest==8.3.3
+pytest-asyncio==0.24.0
+pytest-cov==6.0.0
+pytest-timeout==2.3.1
+
+# Dev / Linting (optional, hapus kalau production)
+mypy==1.13.0
+ruff==0.8.1
