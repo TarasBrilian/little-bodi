@@ -27,11 +27,13 @@ class JSONReportFormatter:
         """
         Build the full JSON report dict from the pipeline context.
         """
+        end_time = ctx.analysis_end or datetime.datetime.now(datetime.timezone.utc)
         duration = (
-            (ctx.analysis_end - ctx.analysis_start).total_seconds()
-            if ctx.analysis_end and ctx.analysis_start
+            (end_time - ctx.analysis_start).total_seconds()
+            if ctx.analysis_start
             else 0.0
         )
+
 
         vulns = ctx.potential_vulnerabilities or []
         exploits = ctx.exploits or []
@@ -68,7 +70,7 @@ class JSONReportFormatter:
                 "mode": "concolic" if ctx.config.use_concolic else "symbolic",
                 "seeds_extracted": len(ctx.seed_inputs),
                 "paths_explored": len(ctx.execution_traces),
-                "fell_back_to_symbolic": False,
+                "fell_back_to_symbolic": getattr(ctx, "fell_back_to_symbolic", False),
                 "timeout_reached": False,
             },
             "vulnerabilities": [

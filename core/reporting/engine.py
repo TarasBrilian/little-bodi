@@ -114,11 +114,13 @@ class ReportingEngine(BaseEngine):
         confirmed = sum(1 for v in validated if v.success)
         total_loss = sum(v.estimated_loss_usd for v in validated if v.success)
 
+        end_time = ctx.analysis_end or datetime.datetime.now(datetime.timezone.utc)
         duration = (
-            (ctx.analysis_end - ctx.analysis_start).total_seconds()
-            if ctx.analysis_end and ctx.analysis_start
+            (end_time - ctx.analysis_start).total_seconds()
+            if ctx.analysis_start
             else 0.0
         )
+
 
         return AnalysisSummary(
             contract_address=ctx.contract_address or "unknown",

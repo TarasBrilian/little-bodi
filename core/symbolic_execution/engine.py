@@ -26,14 +26,24 @@ class SymbolicExecutionEngine(BaseEngine):
         Executes the symbolic engine.
         """
         # Use deobfuscated CFG if available, otherwise fallback to original CFG
-        cfg = ctx.deobfuscated_cfg or ctx.cfg
-        bytecode = ctx.instrumented_bytecode or ctx.bytecode
+        cfg = getattr(ctx, "deobfuscated_cfg", None) or ctx.cfg
+        bytecode = getattr(ctx, "instrumented_bytecode", None) or ctx.bytecode
         
+        blocks_len = len(cfg.blocks) if cfg and hasattr(cfg, "blocks") else 0
+        logger.info(f"DEBUG_ENGINE: Starting symbolic execution on {len(bytecode)} bytes bytecode")
+        logger.info(f"DEBUG_ENGINE: CFG used: {'deobfuscated_cfg' if ctx.deobfuscated_cfg else 'cfg'} with {blocks_len} basic blocks")
+
         # Initialize Interpreter
         interpreter = SymbolicEVMInterpreter(bytecode, cfg, self.config)
         
         # Create Initial State
         initial_state = SymbolicState(pc=0)
+        
+        print("DEBUG: CFG type =", type(cfg))
+        print("DEBUG: CFG blocks count =", len(cfg.blocks) if cfg else "None")
+        print("DEBUG: Initial worklist =", [initial_state.pc])
+        print("DEBUG: max_paths config =", self.config.max_symbolic_paths)
+        print("DEBUG: max_depth config =", self.config.max_path_depth)
         
         # Run Symbolic Execution
         traces = interpreter.execute(initial_state)

@@ -149,10 +149,12 @@ class ConcolicEngine(BaseEngine):
         # In a real scenario, we would use extractor to get seeds
         # For now, we use what's in context or fallback
         seeds = ctx.seed_inputs
+
         
         # If no seeds and fallback enabled, run symbolic
         if not seeds and self.config.fallback_to_symbolic:
             logger.info("No seeds available, falling back to symbolic execution.")
+            ctx.fell_back_to_symbolic = True
             from core.symbolic_execution.engine import SymbolicExecutionEngine
             sym_engine = SymbolicExecutionEngine(self.config)
             return sym_engine.execute(ctx)

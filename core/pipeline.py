@@ -72,6 +72,7 @@ class AnalysisContext:
     # --- Stage B: Vulnerability Detection ---
     seed_inputs: list = field(default_factory=list)
     execution_traces: list = field(default_factory=list)
+    fell_back_to_symbolic: bool = False
     potential_vulnerabilities: list = field(default_factory=list)
 
     # --- Stage C: Exploit Generation & Validation ---
