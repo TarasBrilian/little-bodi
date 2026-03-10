@@ -1,10 +1,11 @@
 analysis:
-  timeout_per_contract: 600
-  max_symbolic_paths: 10000
-  max_path_depth: 500
+  timeout_per_contract: 30
+  max_symbolic_paths: 300
+  max_path_depth: 75
   branch_table_max_visits: 2
   fallback_to_symbolic: true
   max_seeds: 50
+  stop_on_first_vuln: true
 
 deobfuscation:
   branch_table_offset: 0xe000

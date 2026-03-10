@@ -10,6 +10,7 @@ class AnalysisSummary(BaseModel):
     contract_address: str
     is_vulnerable: bool
     vulnerability_count: int
+    actionable_vulnerability_count: int
     confirmed_exploit_count: int
     total_estimated_loss_usd: float
     obfuscation_detected: bool
@@ -20,13 +21,13 @@ class AnalysisSummary(BaseModel):
     @property
     def risk_level(self) -> str:
         """Compute risk level from exploit/vulnerability counts and loss."""
-        if self.confirmed_exploit_count == 0 and self.vulnerability_count == 0:
+        if self.confirmed_exploit_count == 0 and self.actionable_vulnerability_count == 0:
             return "none"
         elif self.confirmed_exploit_count > 0 and self.total_estimated_loss_usd > 1_000_000:
             return "critical"
         elif self.confirmed_exploit_count > 0:
             return "high"
-        elif self.vulnerability_count > 0:
+        elif self.actionable_vulnerability_count > 0:
             return "medium"
         return "low"
 

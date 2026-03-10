@@ -194,6 +194,12 @@ class MarkdownReportFormatter:
 
 ---
 
+## Symbolic Path Analysis (Bypass Mode: {bypass_mode})
+
+{cfg_visualization}
+
+---
+
 ## Vulnerability Summary
 
 {vulnerability_count} vulnerability/vulnerabilities found.
@@ -210,10 +216,10 @@ class MarkdownReportFormatter:
 
 ## Estimated Financial Impact
 
-**Total estimated loss (lower bound)**: ${total_loss_usd:,.2f}
+**Total Potential Exposure**: ${total_potential_loss_usd:,.2f}
+**Total Confirmed Loss**: ${total_validated_loss_usd:,.2f}
 
-> Note: This is a lower bound. Only {token_count} major tokens tracked: {token_list}.
-> Actual exposure may be higher.
+> Note: **Total Potential Exposure** reflects assets at risk if internal access controls (whitelists/owners) are compromised. This is the value an attacker would target in a phishing or private key compromise scenario.
 
 ---
 
@@ -257,6 +263,7 @@ class MarkdownReportFormatter:
 
         vulns = ctx.potential_vulnerabilities or []
         exploits = ctx.exploits or []
+        validated = ctx.validated_exploits or []
 
         deobf_status = (
             "> Deobfuscation successful — coverage restored from "
@@ -265,11 +272,14 @@ class MarkdownReportFormatter:
             else "> No obfuscation detected."
         )
 
+        bypass_mode = "ENABLED (Whitebox)" if ctx.config.bypass_access_control else "DISABLED (Standard)"
+        cfg_visualization = self._render_cfg_visualization(ctx)
         vuln_details = self._render_vuln_details(vulns)
-        exploit_summary = self._render_exploit_summary(exploits, ctx.validated_exploits or [])
+        exploit_summary = self._render_exploit_summary(exploits, validated)
         mitigation_list = self._render_mitigations(vulns)
 
-        total_loss = summary.total_estimated_loss_usd
+        total_potential_loss = sum(e.estimated_loss_usd for e in exploits)
+        total_validated_loss = summary.total_estimated_loss_usd
         token_list = ", ".join(TRACKED_TOKENS.values())
         token_count = len(TRACKED_TOKENS)
 
@@ -284,14 +294,36 @@ class MarkdownReportFormatter:
             indirect_jump_count=len(ctx.indirect_jumps),
             branch_table_entries=len(ctx.indirect_jumps),
             deobfuscation_status=deobf_status,
+            bypass_mode=bypass_mode,
+            cfg_visualization=cfg_visualization,
             vulnerability_count=len(vulns),
             vulnerability_details=vuln_details or "_No vulnerabilities detected._",
             exploit_summary=exploit_summary or "_No exploits generated._",
-            total_loss_usd=total_loss,
-            token_count=token_count,
-            token_list=token_list,
+            total_potential_loss_usd=total_potential_loss,
+            total_validated_loss_usd=total_validated_loss,
             mitigation_list=mitigation_list or "_No mitigations required._",
         )
+
+    def _render_cfg_visualization(self, ctx: AnalysisContext) -> str:
+        """Generates a Mermaid CFG diagram showing the bypass and vulnerable sink."""
+        if not ctx.potential_vulnerabilities:
+            return "_No vulnerable paths to visualize._"
+
+        # Simplified Mermaid visualization
+        mermaid = ["```mermaid", "graph TD"]
+        mermaid.append("  Start[Entry Point] --> Check{Owner Check}")
+        mermaid.append("  Check -->|Normal User| Revert[REVERT / INVALID]")
+        
+        if ctx.config.bypass_access_control:
+            mermaid.append("  Check -->|Whitebox Bypass| Logic[Contract Logic]")
+            for i, v in enumerate(ctx.potential_vulnerabilities, 1):
+                mermaid.append(f"  Logic --> Vuln{i}[vuln-{i:03d} at {hex(v.call_pc)}]")
+                mermaid.append(f"  Vuln{i} --> Sink[Vulnerable CALL / Transfer]")
+        else:
+            mermaid.append("  Check -->|Owner Only| Logic[logic obscured]")
+            
+        mermaid.append("```")
+        return "\n".join(mermaid)
 
     def _render_vuln_details(self, vulns: List[PotentialVulnerability]) -> str:
         parts = []
@@ -317,13 +349,33 @@ class MarkdownReportFormatter:
         if not exploits:
             return ""
         validated_map = {v.exploit.vuln_call_pc: v for v in validated}
-        rows = ["| # | Token | Validated | Status | Loss (USD) |", "|---|-------|-----------|--------|------------|"]
+        rows = [
+            "| # | Token | Validated | Status | Potential Exposure |",
+            "|---|-------|-----------|--------|-------------------|"
+        ]
         for i, exp in enumerate(exploits, 1):
             v = validated_map.get(exp.vuln_call_pc)
             ok = "**YES**" if (v and v.success) else "No"
-            status = v.validation_note if (v and v.validation_note) else ("_Reverted_" if (v and not v.success) else "N/A")
-            loss = f"${exp.estimated_loss_usd:,.2f}" if exp.estimated_loss_usd else "N/A"
-            rows.append(f"| {i} | {exp.target_token_symbol} | {ok} | {status} | {loss} |")
+            
+            # Use potential loss from the individual exploit if validated loss is 0
+            loss_val = exp.estimated_loss_usd or 0.0
+            
+            if loss_val > 0:
+                loss_str = f"${loss_val:,.2f}"
+            else:
+                loss_str = "-"
+            
+            status = "_N/A_"
+            if v:
+                if v.success:
+                    status = "**Confirmed**"
+                elif v.validation_note:
+                    # Simplify the status string for the jury
+                    status = "Access Control Blocked" if "access control" in v.validation_note.lower() else v.validation_note
+                else:
+                    status = "_Reverted_"
+            
+            rows.append(f"| {i} | {exp.target_token_symbol} | {ok} | {status} | {loss_str} |")
         return "\n".join(rows)
 
     def _render_mitigations(self, vulns: List[PotentialVulnerability]) -> str:

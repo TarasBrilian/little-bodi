@@ -4,6 +4,7 @@ import z3
 import logging
 import time
 import heapq
+from web3 import Web3
 from typing import List, Dict, Optional, Tuple, Set, Union, Any
 from dataclasses import dataclass
 from collections import deque
@@ -138,12 +139,18 @@ class SymbolicEVMInterpreter:
     Symbolic EVM Interpreter that executes paths and handles state forking.
     """
 
-    def __init__(self, bytecode: bytes, cfg: ControlFlowGraph, config: Any):
+    def __init__(self, bytecode: bytes, cfg: ControlFlowGraph, config: Any, contract_address: Optional[str] = None):
         self.bytecode = bytecode
         self.cfg = cfg
         self.config = config
+        self.contract_address = contract_address
         self.disassembly: Dict[int, Instruction] = self._flatten_cfg(cfg)
         self.blocks_that_can_reach_call, self.block_distances = self._precompute_reachability(cfg)
+        self.vuln_checker = None
+        
+        self.w3 = None
+        if config.rpc_url:
+            self.w3 = Web3(Web3.HTTPProvider(config.rpc_url))
 
     def _flatten_cfg(self, cfg: ControlFlowGraph) -> Dict[int, Instruction]:
         """
@@ -231,7 +238,17 @@ class SymbolicEVMInterpreter:
     def execute(self, initial_state: SymbolicState) -> List[SymbolicState]:
         """Explores paths using DFS."""
         traces: List[SymbolicState] = []
-        worklist: List[SymbolicState] = [initial_state]
+        
+        # Priority Queue: (distance_to_call, uniqueness_counter, state)
+        # 0 distance means the state is already in a CALL block.
+        # We use a counter to avoid Comparing SymbolicState objects directly.
+        counter = 0
+        def get_priority(s):
+            return self.block_distances.get(s.pc, 9999)
+
+        worklist: List[Tuple[int, int, SymbolicState]] = [(get_priority(initial_state), counter, initial_state)]
+        heapq.heapify(worklist)
+        
         paths_explored = 0
         start_time = time.time()
 
@@ -244,6 +261,8 @@ class SymbolicEVMInterpreter:
             "pruned_branch_table": 0,
             "pruned_invalid_jump": 0,
             "pruned_empty_block": 0,
+            "pruned_no_call_path": 0,
+            "pruned_loop": 0,
             "pruned_other": 0,
             "worklist_empty": 0,
         }
@@ -253,23 +272,54 @@ class SymbolicEVMInterpreter:
                 logger.warning("Symbolic execution timeout reached")
                 break
 
-            state = worklist.pop()
+            _, _, state = heapq.heappop(worklist)
+
+            # Smart Pruning: Check if this PC can reach a CALL
+            # Note: pc=0 is handled as it's the entry.
+            if state.pc != 0 and state.pc not in self.blocks_that_can_reach_call:
+                # Still check if we are currently IN a CALL block (distance 0)
+                if self.block_distances.get(state.pc, -1) != 0:
+                    stats["pruned_no_call_path"] += 1
+                    continue
 
             # DFS exploration
             result = self._execute_path(state)
+            
+            # Early Exit: If vuln found and config.stop_on_first_vuln is True
+            if self.config.stop_on_first_vuln and state.calls_encountered:
+                is_actually_vulnerable = False
+                if self.vuln_checker:
+                    # Check if the last call found is a vulnerability
+                    call = state.calls_encountered[-1]
+                    # We need the taint_map from the state
+                    if self.vuln_checker(call, state.taint_map):
+                        is_actually_vulnerable = True
+                else:
+                    # If no checker, assume any CALL encounter is a potential vuln
+                    is_actually_vulnerable = True
+
+                if is_actually_vulnerable:
+                    traces.append(state)
+                    paths_explored += 1
+                    stats["completed"] += 1
+                    logger.info("Found first vulnerability. Early exit.")
+                    break
+
             if result.type == "terminal":
                 traces.append(state)
                 stats["completed"] += 1
                 paths_explored += 1
             elif result.type == "fork":
                 # Add feasible paths to worklist
-                for s in reversed(result.states):
+                for s in result.states:
                     if s.is_feasible():
-                        worklist.append(s)
+                        counter += 1
+                        heapq.heappush(worklist, (get_priority(s), counter, s))
                     else:
                         stats["pruned_unsat"] += 1
             elif result.type == "continue":
-                worklist.append(result.states[0])
+                counter += 1
+                heapq.heappush(worklist, (get_priority(state), counter, result.states[0]))
             elif result.type == "prune":
                 reason = result.reason.lower()
                 if "depth" in reason:
@@ -280,6 +330,8 @@ class SymbolicEVMInterpreter:
                     stats["pruned_invalid_jump"] += 1
                 elif "instruction" in reason:
                     stats["pruned_empty_block"] += 1
+                elif "loop" in reason:
+                    stats["pruned_loop"] += 1
                 else:
                     stats["pruned_other"] += 1
                 traces.append(state)
@@ -289,6 +341,11 @@ class SymbolicEVMInterpreter:
     def _execute_path(self, state: SymbolicState) -> ExecutionResult:
         """Executes instructions until a fork or terminal opcode is hit."""
         while state.pc < len(self.bytecode):
+            # Loop detection
+            state.visit_counts[state.pc] = state.visit_counts.get(state.pc, 0) + 1
+            if state.visit_counts[state.pc] > 3:
+                return ExecutionResult.prune(f"Infinite loop detected at PC {state.pc}")
+
             instr = self.disassembly.get(state.pc)
             if not instr:
                 return ExecutionResult.prune(f"No instruction at PC {state.pc}")
@@ -359,6 +416,22 @@ class SymbolicEVMInterpreter:
                             > self.config.branch_table_max_visits
                         ):
                             return ExecutionResult.continue_(fallthrough)
+
+                    # Bypass access control logic
+                    if self.config.bypass_access_control:
+                        # If one branch is terminal (REVERT/INVALID) and the other is not,
+                        # and it looks like an access control check (e.g., involving CALLER),
+                        # skip the terminal branch.
+                        taken_instr = self.disassembly.get(dest)
+                        fall_instr = self.disassembly.get(next_pc)
+                        
+                        taken_terminal = taken_instr and taken_instr.opcode in (OP_REVERT, OP_INVALID)
+                        fall_terminal = fall_instr and fall_instr.opcode in (OP_REVERT, OP_INVALID)
+
+                        if taken_terminal and not fall_terminal:
+                            return ExecutionResult.continue_(fallthrough)
+                        elif fall_terminal and not taken_terminal:
+                            return ExecutionResult.continue_(taken)
 
                     return ExecutionResult.fork(taken, fallthrough)
                 else:
@@ -739,15 +812,25 @@ class SymbolicEVMInterpreter:
             key = slot if isinstance(slot, int) else str(slot)
             val = state.storage.get(key, None)
             if val is None:
-                # Always create a symbolic value for any slot not yet written.
-                # This covers both concrete slots (e.g. EIP-1967 implementation
-                # slot) and symbolic slots.  Mark with source="storage" so the
-                # VulnerabilityOracle can detect storage-controlled targets.
-                val = z3.BitVec(
-                    f"storage_{instr.pc}_{len(state.path_constraints)}", 256
-                )
-                state.storage[key] = val
-                state.taint_map.mark_tainted(val, "storage")
+                # Try to fetch from RPC if key is concrete and we have a contract address
+                if isinstance(slot, int) and self.w3 and self.contract_address:
+                    try:
+                        checksum_addr = Web3.to_checksum_address(self.contract_address)
+                        # Fetch storage at slot
+                        hex_val = self.w3.eth.get_storage_at(checksum_addr, slot).hex()
+                        val = int(hex_val, 16)
+                        logger.info(f"Fetched storage at slot {slot}: {val}")
+                        state.storage[key] = val
+                    except Exception as e:
+                        logger.warning(f"Failed to fetch storage at {slot}: {e}")
+
+                if val is None:
+                    # Fallback to symbolic value if not fetched or not fetchable
+                    val = z3.BitVec(
+                        f"storage_{instr.pc}_{len(state.path_constraints)}", 256
+                    )
+                    state.storage[key] = val
+                    state.taint_map.mark_tainted(val, "storage")
             state.stack.append(val)
             return True
 

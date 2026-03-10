@@ -37,6 +37,7 @@ class AnalysisConfig:
     max_path_depth: int = 75
     fallback_to_symbolic: bool = True
     stop_on_first_vuln: bool = True
+    bypass_access_control: bool = False
 
     # Vulnerability / Exploit
     adversary_address: str = ADVERSARY_ADDRESS

@@ -34,7 +34,14 @@ class SymbolicExecutionEngine(BaseEngine):
         logger.info(f"DEBUG_ENGINE: CFG used: {'deobfuscated_cfg' if ctx.deobfuscated_cfg else 'cfg'} with {blocks_len} basic blocks")
 
         # Initialize Interpreter
-        interpreter = SymbolicEVMInterpreter(bytecode, cfg, self.config)
+        interpreter = SymbolicEVMInterpreter(bytecode, cfg, self.config, ctx.contract_address)
+        
+        # Pass a vulnerability checker to the interpreter for early exit if requested
+        if self.config.stop_on_first_vuln:
+            from core.vulnerability.engine import VulnerabilityOracle
+            from core.constants import TRACKED_TOKENS
+            oracle = VulnerabilityOracle(TRACKED_TOKENS)
+            interpreter.vuln_checker = oracle.classify
         
         # Create Initial State
         initial_state = SymbolicState(pc=0)

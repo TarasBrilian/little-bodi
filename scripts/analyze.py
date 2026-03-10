@@ -43,7 +43,8 @@ def load_settings(config_path="configs/settings.yaml"):
 @click.option("--output", help="Directory for analysis reports", default="data/results")
 @click.option("--block-number", type=int, help="Block number to fork from (optional)")
 @click.option("--no-concolic", is_flag=True, help="Disable concolic execution and use pure symbolic execution")
-def main(address, bytecode_file, rpc, output, block_number, no_concolic):
+@click.option("--bypass-access-control", is_flag=True, help="Bypass strict msg.sender/tx.origin checks to analyze protected logic")
+def main(address, bytecode_file, rpc, output, block_number, no_concolic, bypass_access_control):
     """
     Little Bodi: Advanced EVM Asset Management Vulnerability Scanner
     """
@@ -68,10 +69,12 @@ def main(address, bytecode_file, rpc, output, block_number, no_concolic):
         "output_dir": output,
         "use_concolic": not no_concolic,
         # Load from YAML if available
-        "timeout_per_contract": analysis_settings.get("timeout_per_contract", 600),
-        "max_symbolic_paths": analysis_settings.get("max_symbolic_paths", 10000),
-        "max_path_depth": analysis_settings.get("max_path_depth", 500),
+        "timeout_per_contract": analysis_settings.get("timeout_per_contract", 30),
+        "max_symbolic_paths": analysis_settings.get("max_symbolic_paths", 300),
+        "max_path_depth": analysis_settings.get("max_path_depth", 75),
         "fallback_to_symbolic": analysis_settings.get("fallback_to_symbolic", True),
+        "stop_on_first_vuln": analysis_settings.get("stop_on_first_vuln", True),
+        "bypass_access_control": bypass_access_control,
     }
 
     # 4. Handle missing address/bytecode

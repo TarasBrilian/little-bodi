@@ -109,6 +109,7 @@ class ReportingEngine(BaseEngine):
     def _build_summary(self, ctx: AnalysisContext) -> AnalysisSummary:
         """Aggregates pipeline results into an AnalysisSummary."""
         vulns = ctx.potential_vulnerabilities or []
+        actionable_vulns = [v for v in vulns if not v.false_positive_candidate]
         validated = ctx.validated_exploits or []
 
         confirmed = sum(1 for v in validated if v.success)
@@ -126,6 +127,7 @@ class ReportingEngine(BaseEngine):
             contract_address=ctx.contract_address or "unknown",
             is_vulnerable=len(vulns) > 0,
             vulnerability_count=len(vulns),
+            actionable_vulnerability_count=len(actionable_vulns),
             confirmed_exploit_count=confirmed,
             total_estimated_loss_usd=total_loss,
             obfuscation_detected=ctx.is_obfuscated,
